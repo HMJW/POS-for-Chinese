@@ -16,8 +16,8 @@ pytorch = 0.4.1
 ## running
 
 ```
-python train.py --pre_emb	# train the model with pretrained embedding
-python evaluate 			# reload the model and evaluate test file
+python train.py --pre_emb    # train the model with pretrained embedding
+python evaluate.py           # reload the model and evaluate test file
 ```
 
 ## results
