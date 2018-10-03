@@ -31,19 +31,19 @@ class TensorDataLoader(object):
         if shuffle:
             np.random.shuffle(self.raw_data)
             self.batches = [self.raw_data[i:i+self.batch_size]
-                     for i in range(0, self.num, self.batch_size)].__iter__()
+                            for i in range(0, self.num, self.batch_size)].__iter__()
         else:
             self.batches = [self.raw_data[i:i+batch_size]
-                         for i in range(0, self.num, batch_size)].__iter__()
+                            for i in range(0, self.num, batch_size)].__iter__()
 
     def __iter__(self):
         if self.shuffle:
             np.random.shuffle(self.raw_data)
             self.batches = [self.raw_data[i:i+self.batch_size]
-                     for i in range(0, self.num, self.batch_size)].__iter__()
+                            for i in range(0, self.num, self.batch_size)].__iter__()
         else:
             self.batches = [self.raw_data[i:i+batch_size]
-                         for i in range(0, self.num, batch_size)].__iter__()
+                            for i in range(0, self.num, batch_size)].__iter__()
         return self
 
     def __next__(self):
