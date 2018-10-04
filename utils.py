@@ -120,7 +120,7 @@ class Corpus():
             tiseq = [self.label2id.get(t, 0) for t in tagseq]
             x.append(torch.tensor(wiseq))
             lens.append(torch.tensor(len(tiseq)))
-            # 不足最大长度的部分用0填充
+            
             char_x.append(torch.tensor([
                 [self.char2id.get(c, self.UNK_char_index)
                  for c in w[:max_len]] + [0] * (max_len - len(w))
