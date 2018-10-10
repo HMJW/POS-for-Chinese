@@ -6,7 +6,7 @@ class Config(object):
         self.test_data_file = '../data/ctb51-penn2malt-default/test.conll'
         self.embedding_file = '../data/embedding/giga.100.txt'
         self.net_file = './char_lstm_crf.pt'
-        self.corpus_file = './corpus.pkl'
+        self.vocab_file = './vocab.pkl'
         
         # model config
         self.char_dim = 100

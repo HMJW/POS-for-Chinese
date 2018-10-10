@@ -61,10 +61,13 @@ class CRFlayer(torch.nn.Module):
         score += self.etrans[target.gather(dim=0, index=ends)].sum()
         return score
 
-    def forward(self, emit_matrix, lengths):
-        pass
+    def forward(self, emit_matrixs, labels, mask):
+        logZ = self.get_logZ(emit_matrixs, mask)
+        scores = self.score(emit_matrixs, labels, mask)
+        # return logZ - scores
+        return (logZ - scores) / emit_matrixs.size()[1]
 
-    def viterbi_decode(self, emit_matrix):
+    def viterbi(self, emit_matrix):
         length = emit_matrix.size()[0]
         max_score = torch.zeros((length, self.labels_num))
         paths = torch.zeros((length, self.labels_num), dtype=torch.long)
@@ -83,3 +86,31 @@ class CRFlayer(torch.nn.Module):
             prev = paths[i][prev.item()]
             predict.insert(0, prev.item())
         return predict
+        
+    def viterbi_batch(self, emits, masks):
+        'optimized by zhangyu'
+        T, B, N = emits.shape
+        lens = masks.sum(dim=0)
+        delta = torch.zeros(T, B, N)
+        paths = torch.zeros(T, B, N, dtype=torch.long)
+
+        delta[0] = self.strans + emits[0]  # [B, N]
+
+        for i in range(1, T):
+            trans_i = self.transitions.unsqueeze(0)  # [1, N, N]
+            emit_i = emits[i].unsqueeze(1)  # [B, 1, N]
+            scores = trans_i + emit_i + delta[i - 1].unsqueeze(2)  # [1, N, N]+[B, 1, N]+[B, N, 1]->[B, N, N]
+            delta[i], paths[i] = torch.max(scores, dim=1)
+
+        predicts = []
+        for i, length in enumerate(lens):
+            prev = torch.argmax(delta[length - 1, i] + self.etrans)
+
+            predict = [prev]
+            for j in reversed(range(1, length)):
+                prev = paths[j, i, prev]
+                predict.append(prev)
+
+            predicts.append(torch.tensor(predict).flip(0))
+
+        return predicts

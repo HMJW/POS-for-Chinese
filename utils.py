@@ -46,27 +46,27 @@ class DataSet(object):
         print('%s : sentences:%d，words:%d' % (filename, self.sentence_num, self.word_num))
 
 
-class Corpus():
+class Vocab():
     def __init__(self, words, labels, chars):
         self.UNK = '<UNK>'
         self.PAD = '<PAD>'
 
-        self.words = [self.PAD] + words + [self.UNK]
-        self.chars = [self.PAD] + chars + [self.UNK]
-        self.labels = labels
+        self._words = [self.PAD] + words + [self.UNK]
+        self._chars = [self.PAD] + chars + [self.UNK]
+        self._labels = labels
 
-        self.word2id = {w: i for i, w in enumerate(self.words)}
-        self.char2id = {c: i for i, c in enumerate(self.chars)}
-        self.label2id = {l: i for i, l in enumerate(self.labels)}
+        self._word2id = {w: i for i, w in enumerate(self._words)}
+        self._char2id = {c: i for i, c in enumerate(self._chars)}
+        self._label2id = {l: i for i, l in enumerate(self._labels)}
 
-        self.num_words = len(self.words)
-        self.num_chars = len(self.chars)
-        self.num_labels = len(self.labels)
+        self.num_words = len(self._words)
+        self.num_chars = len(self._chars)
+        self.num_labels = len(self._labels)
 
-        self.UNK_word_index = self.word2id[self.UNK]
-        self.UNK_char_index = self.char2id[self.UNK]
-        self.PAD_word_index = self.word2id[self.PAD]
-        self.PAD_char_index = self.char2id[self.PAD]
+        self.UNK_word_index = self._word2id[self.UNK]
+        self.UNK_char_index = self._char2id[self.UNK]
+        self.PAD_word_index = self._word2id[self.PAD]
+        self.PAD_char_index = self._char2id[self.PAD]
 
     def read_embedding(self, embedding_file):
         with open(embedding_file, 'r') as f:
@@ -83,20 +83,20 @@ class Corpus():
 
         # extend words and chars
         # ensure the <PAD> token at the first position
-        self.words =[self.PAD] + sorted(set(self.words + unk_words) - {self.PAD})
-        self.chars =[self.PAD] + sorted(set(self.chars + unk_chars) - {self.PAD})
+        self._words =[self.PAD] + sorted(set(self._words + unk_words) - {self.PAD})
+        self._chars =[self.PAD] + sorted(set(self._chars + unk_chars) - {self.PAD})
 
         # update the words,chars dictionary
-        self.word2id = {w: i for i, w in enumerate(self.words)}
-        self.char2id = {c: i for i, c in enumerate(self.chars)}
-        self.UNK_word_index = self.word2id[self.UNK]
-        self.UNK_char_index = self.char2id[self.UNK]
-        self.PAD_word_index = self.word2id[self.PAD]
-        self.PAD_char_index = self.char2id[self.PAD]
+        self._word2id = {w: i for i, w in enumerate(self._words)}
+        self._char2id = {c: i for i, c in enumerate(self._chars)}
+        self.UNK_word_index = self._word2id[self.UNK]
+        self.UNK_char_index = self._char2id[self.UNK]
+        self.PAD_word_index = self._word2id[self.PAD]
+        self.PAD_char_index = self._char2id[self.PAD]
         
         # update the numbers of words and chars
-        self.num_words = len(self.words)
-        self.num_chars = len(self.chars)
+        self.num_words = len(self._words)
+        self.num_chars = len(self._chars)
 
         # initial the extended embedding table
         embdim = len(vectors[0])
@@ -111,77 +111,63 @@ class Corpus():
                 extended_embed[i] = pretrained[w]
         return extended_embed
 
-    def process_data(self, sentences, labels, max_len=20):
-        x, lens, char_x, char_lens, y = [], [], [], [], []
+    def word2id(self, word):
+        assert (isinstance(word, str) or isinstance(word, list))
+        if isinstance(word, str):
+            return self._word2id.get(word, self.UNK_word_index)
+        elif isinstance(word, list):
+            return [self._word2id.get(w, self.UNK_word_index) for w in word]
 
-        for wordseq, tagseq in zip(sentences, labels):
-            wiseq = [self.word2id.get(w, self.UNK_word_index) for w in wordseq]
+    def label2id(self, label):
+        assert (isinstance(label, str) or isinstance(label, list))
+        if isinstance(label, str):
+            return self._label2id.get(label, 0) # if label not in training data, index to 0 ?
+        elif isinstance(label, list):
+            return [self._label2id.get(l, 0) for l in label]
 
-            tiseq = [self.label2id.get(t, 0) for t in tagseq]
-            x.append(torch.tensor(wiseq))
-            lens.append(torch.tensor(len(tiseq)))
-            
-            char_x.append(torch.tensor([
-                [self.char2id.get(c, self.UNK_char_index)
-                 for c in w[:max_len]] + [0] * (max_len - len(w))
-                for w in wordseq
-            ]))
-            char_lens.append(torch.tensor([min(len(w), max_len)
-                                           for w in wordseq],
-                                          dtype=torch.long))
-            y.append(torch.tensor([ti for ti in tiseq], dtype=torch.long))
-
-        # x = pad_sequence(x, True)
-        # lens = torch.tensor(lens)
-        # char_x = pad_sequence(char_x, True, padding_value=0)
-        # char_lens = pad_sequence(char_lens, True, padding_value=0)
-        # y = pad_sequence(y, True, padding_value=0)
-        # dataset = Data.TensorDataset(x, lens, char_x, char_lens, y)
-        return TensorDataSet(x, lens, char_x, char_lens, y)
+    def char2id(self, char, max_len=20):
+        assert (isinstance(char, str) or isinstance(char, list))
+        if isinstance(char, str):
+            return self._char2id.get(char, self.UNK_char_index)
+        elif isinstance(char, list):
+            return [[self._char2id.get(c, self.UNK_char_index) for c in w[:max_len]] + 
+                    [0] * (max_len - len(w)) for w in char]
 
 
 class Evaluator(object):
-    def __init__(self, word2id, char2id, label2id):
+    def __init__(self, vocab):
         self.pred_num = 0
         self.gold_num = 0
         self.correct_num = 0
-        self.word2id = word2id
-        self.char2id = char2id
-        self.label2id = label2id
-        self.labels = list(label2id.keys())
+        self.vocab = vocab
 
     def clear_num(self):
         self.pred_num = 0
         self.gold_num = 0
         self.correct_num = 0
 
-    def parse(self, wordseq):
-        word_lens = list(map(len, wordseq))
-        max_word_length = max(word_lens)
-        chars = torch.full([len(wordseq), max_word_length], 0, dtype=torch.long)
-
-        for word, char_vector in zip(wordseq, chars):
-            for i in range(len(word)):
-                char_vector[i] = self.char2id.get(
-                    word[i], self.char2id['<UNK>'])
-
-        sentence = torch.tensor(list(
-            map(lambda x: self.word2id.get(x, self.word2id['<UNK>']), wordseq)))
-        x = sentence.view(1, -1)
-        length = torch.tensor([len(wordseq)], dtype=torch.long)
-        word_lens = torch.tensor([word_lens], dtype=torch.long)
-        return x, length, chars.unsqueeze(0), word_lens
-
-    def eval_tag(self, network, dataset):
+    def eval_tag(self, network, data_loader):
         network.eval()
-        for wordseq, labelseq in zip(dataset.word_seqs, dataset.label_seqs):
-            x, length, chars, word_lens = self.parse(wordseq)
-            out = network.forward(x, length, chars, word_lens)
-            pred = network.predict(out.view(length, -1))
-            pred = list(map(lambda x: self.labels[x], pred))
-            correct_num = sum(int(a == b) for a, b in zip(pred, labelseq))
+        total_loss = 0.0
+
+        for x, lens, chars_x, chars_lens, y in data_loader:
+            batch_size = x.size(0)
+            # mask = torch.arange(y.size(1)) < lens.unsqueeze(-1)
+            mask = x.gt(0)
+            
+            out = network.forward(x, lens, chars_x, chars_lens)
+
+            batch_loss = network.get_loss(out.transpose(0, 1), y.t(), mask.t()) * batch_size
+            total_loss += batch_loss
+
+            predicts = network.CRFlayer.viterbi_batch(out.transpose(0, 1), mask.t())
+            predicts = pad_sequence(predicts, padding_value=-1, batch_first=True)
+
+            correct_num = torch.sum(predicts==y)
             self.correct_num += correct_num
-            self.pred_num += len(pred)
-            self.gold_num += len(labelseq)
-        precision = self.correct_num/self.pred_num
-        return precision
+            self.pred_num += sum(lens)
+            self.gold_num += sum(lens)
+
+        precision = self.correct_num.float()/self.pred_num.float()
+        self.clear_num()
+        return total_loss, precision
