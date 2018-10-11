@@ -22,7 +22,7 @@ def process_data(vocab, dataset, max_word_len=20):
         word_idxs.append(torch.tensor(_word_idxs))
         sen_lens.append(torch.tensor(len(_word_idxs)))
         
-        _char_idxs = vocab.char2id(wordseq)
+        _char_idxs = vocab.char2id(wordseq, max_word_len)
         char_idxs.append(torch.tensor(_char_idxs))
 
         _word_lens = [min(len(w), max_word_len) for w in wordseq]
