@@ -6,8 +6,6 @@ import torch.nn.init as init
 import torch.utils.data as Data
 from torch.nn.utils.rnn import *
 
-from loader import TensorDataSet
-
 
 def save_pkl(data, filename):
     with open(filename, 'wb') as f:
@@ -19,8 +17,18 @@ def load_pkl(filename):
         obj = pickle.load(f)
     return obj
 
-    
-class DataSet(object):
+
+def collate_fn(data):
+    batch = zip(*data)
+    return tuple([torch.tensor(x) if len(x[0].size()) < 1 else pad_sequence(x, True) for x in batch])
+
+
+def collate_fn_cuda(data):
+    batch = zip(*data)
+    return tuple([torch.tensor(x).cuda() if len(x[0].size()) < 1 else pad_sequence(x, True).cuda() for x in batch])
+
+
+class Corpus(object):
     def __init__(self, filename=None):
         self.filename = filename
         self.sentence_num = 0
@@ -46,7 +54,19 @@ class DataSet(object):
         print('%s : sentences:%d，words:%d' % (filename, self.sentence_num, self.word_num))
 
 
-class Vocab():
+class TensorDataSet(Data.Dataset):
+    def __init__(self, *data):
+        super(TensorDataSet, self).__init__()
+        self.items = list(zip(*data))
+
+    def __getitem__(self, index):
+        return self.items[index]
+    
+    def __len__(self):
+        return len(self.items)
+    
+
+class Vocab(object):
     def __init__(self, words, labels, chars):
         self.UNK = '<UNK>'
         self.PAD = '<PAD>'
@@ -78,8 +98,8 @@ class Vocab():
         ])
 
         pretrained = {w: torch.tensor(v) for w, v in zip(words, vectors)}
-        unk_words = [w for w in words if w not in self.word2id]
-        unk_chars = [c for c in ''.join(unk_words) if c not in self.char2id]
+        unk_words = [w for w in words if w not in self._word2id]
+        unk_chars = [c for c in ''.join(unk_words) if c not in self._char2id]
 
         # extend words and chars
         # ensure the <PAD> token at the first position
@@ -106,7 +126,7 @@ class Vocab():
 
         # the word in pretrained file use pretrained vector
         # the word not in pretrained file but in training data use random initialized vector
-        for i, w in enumerate(self.words):
+        for i, w in enumerate(self._words):
             if w in pretrained:
                 extended_embed[i] = pretrained[w]
         return extended_embed
@@ -133,41 +153,65 @@ class Vocab():
             return [[self._char2id.get(c, self.UNK_char_index) for c in w[:max_len]] + 
                     [0] * (max_len - len(w)) for w in char]
 
+    def id2label(self, id):
+        assert (isinstance(id, int) or isinstance(id, list))
+        if isinstance(id, int):
+            assert (id >= self.num_labels)
+            return self._labels[id] # if label not in training data, index to 0 ?
+        elif isinstance(id, list):
+            return [self._labels[i] for i in id]
 
-class Evaluator(object):
-    def __init__(self, vocab):
-        self.pred_num = 0
-        self.gold_num = 0
-        self.correct_num = 0
-        self.vocab = vocab
 
-    def clear_num(self):
-        self.pred_num = 0
-        self.gold_num = 0
-        self.correct_num = 0
+class Decoder(object):
+    def __init__(self):
+        pass
 
-    def eval_tag(self, network, data_loader):
-        network.eval()
-        total_loss = 0.0
+    @staticmethod
+    def viterbi(crf, emit_matrix):
+        length = emit_matrix.size()[0]
+        max_score = torch.zeros_like(emit_matrix)
+        paths = torch.zeros_like(emit_matrix, dtype=torch.long)
 
-        for x, lens, chars_x, chars_lens, y in data_loader:
-            batch_size = x.size(0)
-            # mask = torch.arange(y.size(1)) < lens.unsqueeze(-1)
-            mask = x.gt(0)
-            
-            out = network.forward(x, lens, chars_x, chars_lens)
+        max_score[0] = emit_matrix[0] + crf.strans
+        for i in range(1, length):
+            emit_scores = emit_matrix[i]
+            scores = emit_scores + crf.transitions + \
+                max_score[i - 1].view(-1, 1).expand(-1, crf.labels_num)
+            max_score[i], paths[i] = torch.max(scores, 0)
 
-            batch_loss = network.get_loss(out.transpose(0, 1), y.t(), mask.t()) * batch_size
-            total_loss += batch_loss
+        max_score[-1] += crf.etrans
+        prev = torch.argmax(max_score[-1])
+        predict = [prev.item()]
+        for i in range(length - 1, 0, -1):
+            prev = paths[i][prev.item()]
+            predict.insert(0, prev.item())
+        return torch.tensor(predict)
+    
+    @staticmethod
+    def viterbi_batch(crf, emits, masks):
+        'optimized by zhangyu'
+        T, B, N = emits.shape
+        lens = masks.sum(dim=0)
+        delta = torch.zeros_like(emits)
+        paths = torch.zeros_like(emits, dtype=torch.long)
 
-            predicts = network.CRFlayer.viterbi_batch(out.transpose(0, 1), mask.t())
-            predicts = pad_sequence(predicts, padding_value=-1, batch_first=True)
+        delta[0] = crf.strans + emits[0]  # [B, N]
 
-            correct_num = torch.sum(predicts==y)
-            self.correct_num += correct_num
-            self.pred_num += sum(lens)
-            self.gold_num += sum(lens)
+        for i in range(1, T):
+            trans_i = crf.transitions.unsqueeze(0)  # [1, N, N]
+            emit_i = emits[i].unsqueeze(1)  # [B, 1, N]
+            scores = trans_i + emit_i + delta[i - 1].unsqueeze(2)  # [1, N, N]+[B, 1, N]+[B, N, 1]->[B, N, N]
+            delta[i], paths[i] = torch.max(scores, dim=1)
 
-        precision = self.correct_num.float()/self.pred_num.float()
-        self.clear_num()
-        return total_loss, precision
+        predicts = []
+        for i, length in enumerate(lens):
+            prev = torch.argmax(delta[length - 1, i] + crf.etrans)
+
+            predict = [prev]
+            for j in reversed(range(1, length)):
+                prev = paths[j, i, prev]
+                predict.append(prev)
+
+            predicts.append(torch.tensor(predict).flip(0))
+
+        return predicts

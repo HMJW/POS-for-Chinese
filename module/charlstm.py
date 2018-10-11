@@ -16,9 +16,9 @@ class CharLSTM(torch.nn.Module):
             bidirectional=True,
             batch_first=True,
         )
-        # self.init_embedding()
+        self.reset_parameters()
         
-    def init_embedding(self):
+    def reset_parameters(self):
         bias = (3 / self.char_embedding.weight.size(1)) ** 0.5
         nn.init.uniform_(self.char_embedding.weight, -bias, bias)
         # nn.init.xavier_uniform_(self.char_embedding.weight)
