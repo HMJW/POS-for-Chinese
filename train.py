@@ -28,6 +28,138 @@ def process_data(vocab, dataset, max_word_len=30, use_cuda=False):
     return TensorDataSet(word_idxs, char_idxs, label_idxs)
 
 
+class Evaluator(object):
+    def __init__(self, vocab, task='pos'):
+        self.pred_num = 0
+        self.gold_num = 0
+        self.correct_num = 0
+        self.vocab = vocab
+        self.task = task
+        self.use_cuda = use_cuda
+        
+    def clear_num(self):
+        self.pred_num = 0
+        self.gold_num = 0
+        self.correct_num = 0
+
+    def eval(self, network, data_loader):
+        network.eval()
+        total_loss = 0.0
+
+        for word_idxs, sen_lens, char_idxs, word_lens, label_idxs in data_loader:
+            batch_size = word_idxs.size(0)
+            # mask = torch.arange(y.size(1)) < lens.unsqueeze(-1)
+            mask = word_idxs.gt(0)
+            
+            out = network.forward(word_idxs, sen_lens, char_idxs, word_lens)
+
+            batch_loss = network.get_loss(out.transpose(0, 1), label_idxs.t(), mask.t())
+            total_loss += batch_loss * batch_size
+
+            predicts = Decoder.viterbi_batch(network.crf, out.transpose(0, 1), mask.t())
+            targets = torch.split(label_idxs[mask], sen_lens.tolist())
+            
+            if self.task == 'pos':
+                for predict, target in zip(predicts, targets):
+                    predict = predict.tolist()
+                    target = target.tolist()                
+                    correct_num = sum(x==y for x,y in zip(predict, target))
+                    self.correct_num += correct_num
+                    self.pred_num += len(predict)
+                    self.gold_num += len(target)
+            elif self.task == 'chunking':
+                for predict, target in zip(predicts, targets):
+                    predict = self.vocab.id2label(predict.tolist())
+                    target = self.vocab.id2label(target.tolist())
+                    correct_num, pred_num, gold_num = self.cal_num(predict, target)
+                    self.correct_num += correct_num
+                    self.pred_num += pred_num
+                    self.gold_num += gold_num
+
+        if self.task == 'pos':
+            precision = self.correct_num/self.pred_num
+            self.clear_num()
+            return total_loss, precision
+        elif self.task == 'chunking':
+            precision = self.correct_num/self.pred_num
+            recall = self.correct_num/self.gold_num
+            Fscore = (2*precision*recall)/(precision+recall)
+            self.clear_num()
+            return total_loss, precision, recall, Fscore
+
+    def cal_num(self, pred, gold):
+        set1 = self.recognize(pred)
+        set2 = self.recognize(gold)
+        intersction = set1 & set2
+        correct_num = len(intersction)
+        pred_num = len(set1)
+        gold_num = len(set2)
+        return correct_num, pred_num, gold_num
+
+    def recognize(self, sequence):
+        """
+        copy from the paper
+        """
+        chunks = []
+        current = None
+
+        for i, label in enumerate(sequence):
+            if label.startswith('B-'):
+
+                if current is not None:
+                    chunks.append('@'.join(current))
+                current = [label.replace('B-', ''), '%d' % i]
+
+            elif label.startswith('S-'):
+
+                if current is not None:
+                    chunks.append('@'.join(current))
+                    current = None
+                base = label.replace('S-', '')
+                chunks.append('@'.join([base, '%d' % i]))
+
+            elif label.startswith('I-'):
+
+                if current is not None:
+                    base = label.replace('I-', '')
+                    if base == current[0]:
+                        current.append('%d' % i)
+                    else:
+                        chunks.append('@'.join(current))
+                        current = [base, '%d' % i]
+
+                else:
+                    current = [label.replace('I-', ''), '%d' % i]
+
+            elif label.startswith('E-'):
+
+                if current is not None:
+                    base = label.replace('E-', '')
+                    if base == current[0]:
+                        current.append('%d' % i)
+                        chunks.append('@'.join(current))
+                        current = None
+                    else:
+                        chunks.append('@'.join(current))
+                        current = [base, '%d' % i]
+                        chunks.append('@'.join(current))
+                        current = None
+
+                else:
+                    current = [label.replace('E-', ''), '%d' % i]
+                    chunks.append('@'.join(current))
+                    current = None
+            else:
+                if current is not None:
+                    chunks.append('@'.join(current))
+                current = None
+
+        if current is not None:
+            chunks.append('@'.join(current))
+
+        return set(chunks)
+
+
 if __name__ == '__main__':
     # init config
     model_name = 'char_lstm_crf'
