@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.nn.init as init
 from torch.nn.utils.rnn import *
 
-from module import CharLSTM,CRFlayer
+from module import *
 
 
 class Char_LSTM_CRF(torch.nn.Module):
@@ -15,6 +15,7 @@ class Char_LSTM_CRF(torch.nn.Module):
         self.embedding_dim = word_dim
         self.drop1 = torch.nn.Dropout(drop)
         self.embedding = torch.nn.Embedding(n_word, word_dim, padding_idx=0)
+
         self.char_lstm = CharLSTM(n_char, char_dim, char_hidden)
 
         if n_layers > 1:
@@ -34,50 +35,53 @@ class Char_LSTM_CRF(torch.nn.Module):
                 bidirectional=True,
                 num_layers=1,
             )
-        self.hidden = nn.Linear(word_hidden, word_hidden//2)
-        self.out = torch.nn.Linear(word_hidden//2, n_target)
-        self.CRFlayer = CRFlayer(n_target)
+        # self.hidden = nn.Linear(word_hidden, word_hidden//2, bias=True)
+        self.out = torch.nn.Linear(word_hidden, n_target, bias=True)
+        self.crf = CRFlayer(n_target)
 
-        self.init_embedding()
-        self.init_linear()
-
-    def init_linear(self):
-        init.xavier_uniform_(self.out.weight)
-        init.xavier_uniform_(self.hidden.weight)
-
-    def init_embedding(self):
-        bias = (3.0 / self.embedding.weight.size(1)) ** 0.5
-        init.uniform_(self.embedding.weight, -bias, bias)
+        self.reset_parameters()
 
     def load_pretrained_embedding(self, pre_embeddings):
         assert (pre_embeddings.size()[1] == self.embedding_dim)
         self.embedding.weight = nn.Parameter(pre_embeddings)
 
-    def forward(self, x, lens, word_chars, word_lengths):
-        mask = torch.arange(x.size()[1]) < lens.unsqueeze(-1)
-        h = self.char_lstm.forward(word_chars[mask], word_lengths[mask])
-        h = pad_sequence(torch.split(
-            h, lens.tolist()), True, padding_value=0)
+    def reset_parameters(self):
+        init.xavier_uniform_(self.out.weight)
+        # init.xavier_uniform_(self.hidden.weight)
+        # bias = (3.0 / self.embedding.weight.size(1)) ** 0.5
+        # init.uniform_(self.embedding.weight, -bias, bias)
+        init.normal_(self.embedding.weight, 0, 1 / self.embedding_dim ** 0.5)
 
-        x = self.embedding(x)
-        x = self.drop1(torch.cat((x, h), 2))
+    def forward(self, word_idxs, char_idxs):
+        # mask = torch.arange(x.size()[1]) < lens.unsqueeze(-1)
+        mask = word_idxs.gt(0)
+        sen_lens = mask.sum(1)
 
-        sorted_lens, sorted_index = torch.sort(lens, dim=0, descending=True)
-        raw_index = torch.sort(sorted_index, dim=0)[1]
-        x = x[sorted_index]
-        x = pack_padded_sequence(x, sorted_lens, batch_first=True)
+        char_vec = self.char_lstm.forward(char_idxs[mask])
+        char_vec = pad_sequence(torch.split(char_vec, sen_lens.tolist()), True, padding_value=0)
 
-        r_out, state = self.lstm_layer(x, None)
+        word_vec = self.embedding(word_idxs)
+        feature = self.drop1(torch.cat((word_vec, char_vec), -1))
+
+        sorted_lens, sorted_idx = torch.sort(sen_lens, dim=0, descending=True)
+        reverse_idx = torch.sort(sorted_idx, dim=0)[1]
+        feature = feature[sorted_idx]
+        feature = pack_padded_sequence(feature, sorted_lens, batch_first=True)
+
+        r_out, state = self.lstm_layer(feature, None)
         out, _ = pad_packed_sequence(r_out, batch_first=True, padding_value=0)
-        out = out[raw_index]
-        out = torch.tanh(self.hidden(out))
+        out = out[reverse_idx]
+        # out = torch.tanh(self.hidden(out))
         out = self.out(out)
         return out
 
-    def get_loss(self, emit_matrixs, labels, mask):
-        logZ = self.CRFlayer.get_logZ(emit_matrixs, mask)
-        scores = self.CRFlayer.score(emit_matrixs, labels, mask)
-        return (logZ - scores) / emit_matrixs.size()[1]
+    def forward_batch(self, batch):
+        word_idxs, char_idxs, label_idxs = batch
+        mask = word_idxs.gt(0)
+        out = self.forward(word_idxs, char_idxs)
+        return mask, out, label_idxs
 
-    def predict(self, emit_matrix):
-        return self.CRFlayer.viterbi_decode(emit_matrix)
+    def get_loss(self, emit, labels, mask):
+        logZ = self.crf.get_logZ(emit, mask)
+        scores = self.crf.score(emit, labels, mask)
+        return (logZ - scores) / emit.size()[1]

@@ -1,39 +1,65 @@
 import argparse
+import datetime
 
-from config import Config
+import torch
+import torch.utils.data as Data
+
+from config import config
 from model import Char_LSTM_CRF
+from train import process_data
 from utils import *
 
 if __name__ == '__main__':
-    config = Config()
+    # init config
+    model_name = 'char_lstm_crf'
+    config = config[model_name]
 
-    parser = argparse.ArgumentParser(description='reload the trained model and evaluate test dataset')
-
-    parser.add_argument('--corpus_file', default=config.corpus_file, help='path to corpus pkl file')
-    parser.add_argument('--net_file', default=config.net_file, help='path to save the model')
-    parser.add_argument('--test_file', default=config.test_data_file, help='path to test file')
+    parser = argparse.ArgumentParser(description='Evaluating')
+    parser.add_argument('--gpu', type=int, default=config.gpu, help='gpu id, set to -1 if use cpu mode')
     parser.add_argument('--thread', type=int, default=config.tread_num, help='thread num')
-
     args = parser.parse_args()
     print('setting:')
     print(args)
-    print()
 
-    torch.set_num_threads(args.thread)
-    
-    # loading corpus
-    corpus = load_pkl(args.corpus_file)
+    # choose GPU
+    if args.gpu >= 0:
+        use_cuda = True
+        torch.cuda.set_device(args.gpu)
+        torch.set_num_threads(args.thread)
+        print('using GPU device : %d' % args.gpu)
+    else:
+        torch.set_num_threads(args.thread)
+        use_cuda = False
 
+    # loading vocab
+    vocab = load_pkl(config.vocab_file)
     # loading network
     print("loading model...")
-    net = torch.load(args.net_file)
+    network = torch.load(config.net_file)
+    # if use GPU , move all needed tensors to CUDA
+    if use_cuda:
+        network.cuda()
+    else:
+        network.cpu()
+    print('loading three datasets...')
+    test = Corpus(config.test_file, lower=False)
+    # process test data , change string to index
+    print('processing datasets...')
+    test_data = process_data(vocab, test, max_word_len=30, use_cuda=False)
+    test_loader = Data.DataLoader(
+        dataset=test_data,
+        batch_size=config.eval_batch,
+        shuffle=False,
+        collate_fn=collate_fn if not use_cuda else collate_fn_cuda
+    )
+    test_num = len(test_loader.dataset)
 
-    # reading test data file
-    print('reading test data file...')
-    test = DataSet(args.test_file)
-    evaluator = Evaluator(corpus.word2id, corpus.char2id, corpus.label2id)
-
+    # init evaluator
+    evaluator = Evaluator(vocab, task='pos')
     print('evaluating test data...')
-    test_p = evaluator.eval_tag(net, test)
-    print('test : precision = %.4f' % (test_p))
-    evaluator.clear_num()
+
+    time_start = datetime.datetime.now()
+    test_total_loss, test_p = evaluator.eval(network, test_loader)
+    print('test  : loss = %.4f  precision = %.4f' % (test_total_loss/test_num, test_p))
+    time_end = datetime.datetime.now()
+    print('iter executing time is ' + str(time_end - time_start))

@@ -9,19 +9,19 @@ class CRFlayer(torch.nn.Module):
     def __init__(self, labels_num):
         super(CRFlayer, self).__init__()
         self.labels_num = labels_num
+        # (i,j)=score(tag[i]->tag[j])
         self.transitions = torch.nn.Parameter(torch.randn(labels_num, labels_num))
-              # (i,j)->p(tag[i]->tag[j])
-        # 句首迁移
+        # (i)=score(<BOS>->tag[i])
         self.strans = torch.nn.Parameter(torch.randn(labels_num))
-        # 句尾迁移
+        # (i)=score(tag[i]-><EOS>)
         self.etrans = torch.nn.Parameter(torch.randn(labels_num))
-        self.init_trans()
+        self.reset_parameters()
 
-    def init_trans(self):
+    def reset_parameters(self):
         # self.transitions.data.zero_()
         # self.etrans.data.zero_()
         # self.strans.data.zero_()
-        init.normal_(self.transitions.data, 0, 1 / self.labels_num ** 0.5)
+        init.normal_(self.transitions.data, 0,1 / self.labels_num ** 0.5)
         init.normal_(self.strans.data, 0, 1 / self.labels_num ** 0.5)
         init.normal_(self.etrans.data, 0, 1 / self.labels_num ** 0.5)
         # bias = (6. / self.labels_num) ** 0.5
@@ -30,21 +30,35 @@ class CRFlayer(torch.nn.Module):
         # nn.init.uniform_(self.etrans, -bias, bias)
 
     def get_logZ(self, emit, mask):
-        T, B, N = emit.shape
-        alpha = emit[0] + self.strans  # [B, N]
-        for i in range(1, T):
-            trans_i = self.transitions.unsqueeze(0)  # [1, N, N]
-            emit_i = emit[i].unsqueeze(1)  # [B, 1, N]
-            mask_i = mask[i].unsqueeze(1).expand_as(alpha)  # [B, N]
-            scores = trans_i + emit_i + alpha.unsqueeze(2)  # [B, N, N]
-            scores = torch.logsumexp(scores, dim=1)  # [B, N]
+        '''
+        emit: emission (unigram) scores of sentences in batch,[sen_len, batch_size, labels_num]
+        mask: masks of sentences in batch,[sen_lens, batch_size]
+        return: sum(logZ) in batch
+        '''
+        sen_len, batch_size, labels_num = emit.shape
+        assert (labels_num==self.labels_num)
+
+        alpha = emit[0] + self.strans  # [batch_size, labels_num]
+        for i in range(1, sen_len):
+            trans_i = self.transitions.unsqueeze(0)  # [1, labels_num, labels_num]
+            emit_i = emit[i].unsqueeze(1)  # [batch_size, 1, labels_num]
+            scores = trans_i + emit_i + alpha.unsqueeze(2)  # [batch_size, labels_num, labels_num]
+            scores = torch.logsumexp(scores, dim=1)  # [batch_size, labels_num]
+
+            mask_i = mask[i].unsqueeze(1).expand_as(alpha)  # [batch_size, labels_num]
             alpha[mask_i] = scores[mask_i]
 
         return torch.logsumexp(alpha+self.etrans, dim=1).sum()
 
     def score(self, emit, target, mask):
-        T, B, N = emit.shape
-        scores = torch.zeros(T, B)
+        '''
+        author: zhangyu
+        return: sum(score)
+        '''
+        sen_len, batch_size, labels_num = emit.shape
+        assert (labels_num==self.labels_num)
+
+        scores = torch.zeros_like(target, dtype=torch.float)  #[sen_len, batch_size, labels_num]
 
         # 加上句间迁移分数
         scores[1:] += self.transitions[target[:-1], target[1:]]
@@ -61,56 +75,11 @@ class CRFlayer(torch.nn.Module):
         score += self.etrans[target.gather(dim=0, index=ends)].sum()
         return score
 
-    def forward(self, emit_matrixs, labels, mask):
-        logZ = self.get_logZ(emit_matrixs, mask)
-        scores = self.score(emit_matrixs, labels, mask)
+    def forward(self, emit, labels, mask):
+        '''
+        return: sum(logZ-score)/batch_size
+        '''
+        logZ = self.get_logZ(emit, mask)
+        scores = self.score(emit, labels, mask)
         # return logZ - scores
-        return (logZ - scores) / emit_matrixs.size()[1]
-
-    def viterbi(self, emit_matrix):
-        length = emit_matrix.size()[0]
-        max_score = torch.zeros((length, self.labels_num))
-        paths = torch.zeros((length, self.labels_num), dtype=torch.long)
-
-        max_score[0] = emit_matrix[0] + self.strans
-        for i in range(1, length):
-            emit_scores = emit_matrix[i]
-            scores = emit_scores + self.transitions + \
-                max_score[i - 1].view(-1, 1).expand(-1, self.labels_num)
-            max_score[i], paths[i] = torch.max(scores, 0)
-
-        max_score[-1] += self.etrans
-        prev = torch.argmax(max_score[-1])
-        predict = [prev.item()]
-        for i in range(length - 1, 0, -1):
-            prev = paths[i][prev.item()]
-            predict.insert(0, prev.item())
-        return predict
-        
-    def viterbi_batch(self, emits, masks):
-        'optimized by zhangyu'
-        T, B, N = emits.shape
-        lens = masks.sum(dim=0)
-        delta = torch.zeros(T, B, N)
-        paths = torch.zeros(T, B, N, dtype=torch.long)
-
-        delta[0] = self.strans + emits[0]  # [B, N]
-
-        for i in range(1, T):
-            trans_i = self.transitions.unsqueeze(0)  # [1, N, N]
-            emit_i = emits[i].unsqueeze(1)  # [B, 1, N]
-            scores = trans_i + emit_i + delta[i - 1].unsqueeze(2)  # [1, N, N]+[B, 1, N]+[B, N, 1]->[B, N, N]
-            delta[i], paths[i] = torch.max(scores, dim=1)
-
-        predicts = []
-        for i, length in enumerate(lens):
-            prev = torch.argmax(delta[length - 1, i] + self.etrans)
-
-            predict = [prev]
-            for j in reversed(range(1, length)):
-                prev = paths[j, i, prev]
-                predict.append(prev)
-
-            predicts.append(torch.tensor(predict).flip(0))
-
-        return predicts
+        return (logZ - scores) / emit.size()[1]
