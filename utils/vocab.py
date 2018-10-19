@@ -8,9 +8,13 @@ import torch.nn.init as init
 class Vocab(object):
     def collect(self, corpus, min_freq=1):
         labels = sorted(set(chain(*corpus.label_seqs)))
-        words = collections.Counter(chain(*corpus.word_seqs))
-        words = [w for w,f in words.items() if f > min_freq]
-        chars = sorted(set(''.join(words)))
+        words = list(chain(*corpus.word_seqs))
+        
+        chars_freq = collections.Counter(''.join(words))
+        chars = [c for c,f in chars_freq.items() if f > min_freq]
+        words_freq = collections.Counter(words)
+        words = [w for w,f in words_freq.items() if f> min_freq]
+       
         return words, chars, labels
 
     def __init__(self, train_corpus, min_freq=1):
@@ -36,8 +40,8 @@ class Vocab(object):
         self.PAD_word_index = self._word2id[self.PAD]
         self.PAD_char_index = self._char2id[self.PAD]
 
-    def read_embedding(self, embedding_file):
-        'ensure the <PAD> index is 0'
+    def read_embedding(self, embedding_file, unk_in_pretrain=None):
+        #  ensure the <PAD> index is 0
         with open(embedding_file, 'r') as f:
             lines = f.readlines()
         splits = [line.split() for line in lines]
@@ -47,13 +51,18 @@ class Vocab(object):
         ])
 
         pretrained = {w: torch.tensor(v) for w, v in zip(words, vectors)}
-        unk_words = [w for w in words if w not in self._word2id]
-        unk_chars = [c for c in ''.join(unk_words) if c not in self._char2id]
+        out_train_words = [w for w in words if w not in self._word2id]
+        out_train_chars = [c for c in ''.join(out_train_words) if c not in self._char2id]
 
         # extend words and chars
         # ensure the <PAD> token at the first position
-        self._words =[self.PAD] + sorted(set(self._words + unk_words) - {self.PAD})
-        self._chars =[self.PAD] + sorted(set(self._chars + unk_chars) - {self.PAD})
+        if isinstance(unk_in_pretrain, str):
+            assert unk_in_pretrain in pretrained
+            unk_vector = pretrained[unk_in_pretrain]
+            self._words =[self.PAD] + sorted(set(self._words + out_train_words) - {self.PAD} - {unk_in_pretrain})
+        else:
+            self._words =[self.PAD] + sorted(set(self._words + out_train_words) - {self.PAD})
+        self._chars =[self.PAD] + sorted(set(self._chars + out_train_chars) - {self.PAD})
 
         # update the words,chars dictionary
         self._word2id = {w: i for i, w in enumerate(self._words)}
@@ -69,14 +78,13 @@ class Vocab(object):
 
         # initial the extended embedding table
         embdim = len(vectors[0])
-        
         extended_embed = torch.randn(self.num_words, embdim)
         init.normal_(extended_embed, 0, 1 / embdim ** 0.5)
-        # bias = (3.0 / embdim) ** 0.5
-        # init.uniform_(extended_embed, -bias, bias)
-
+        
         # the word in pretrained file use pretrained vector
         # the word not in pretrained file but in training data use random initialized vector
+        if isinstance(unk_in_pretrain, str):
+            extended_embed[self.UNK_word_index] = unk_vector
         for i, w in enumerate(self._words):
             if w in pretrained:
                 extended_embed[i] = pretrained[w]

@@ -16,6 +16,7 @@ pytorch = 0.4.1
 ## running
 
 ```
+mkdir save                   # or define other path to save model and vocab
 python train.py --pre_emb    # train the model with pretrained embedding
 python evaluate.py           # reload the model and evaluate test file
 ```
@@ -23,7 +24,7 @@ python evaluate.py           # reload the model and evaluate test file
 ## results
 
 ```
-dev = 96.00%
-test = 95.68%
+dev=95.85%
+test=95.67%
 ```
 

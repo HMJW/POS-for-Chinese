@@ -42,24 +42,23 @@ if __name__ == '__main__':
     else:
         network.cpu()
     print('loading three datasets...')
-    test = Corpus(config.test_file, lower=False)
+    test = Corpus(config.test_file)
     # process test data , change string to index
     print('processing datasets...')
-    test_data = process_data(vocab, test, max_word_len=30, use_cuda=False)
+    test_data = process_data(vocab, test, max_word_len=30)
     test_loader = Data.DataLoader(
         dataset=test_data,
         batch_size=config.eval_batch,
         shuffle=False,
         collate_fn=collate_fn if not use_cuda else collate_fn_cuda
     )
-    test_num = len(test_loader.dataset)
 
     # init evaluator
-    evaluator = Evaluator(vocab, task='pos')
+    evaluator = Evaluator(vocab)
     print('evaluating test data...')
 
     time_start = datetime.datetime.now()
-    test_total_loss, test_p = evaluator.eval(network, test_loader)
-    print('test  : loss = %.4f  precision = %.4f' % (test_total_loss/test_num, test_p))
+    test_loss, test_p = evaluator.eval(network, test_loader)
+    print('test  : loss = %.4f  precision = %.4f' % (test_loss, test_p))
     time_end = datetime.datetime.now()
     print('iter executing time is ' + str(time_end - time_start))

@@ -8,7 +8,7 @@ from model import Char_LSTM_CRF
 from utils import *
 
 
-def process_data(vocab, dataset, max_word_len=30, use_cuda=False):
+def process_data(vocab, dataset, max_word_len=30):
     word_idxs, char_idxs, label_idxs = [], [], []
 
     for wordseq, labelseq in zip(dataset.word_seqs, dataset.label_seqs):
@@ -16,14 +16,9 @@ def process_data(vocab, dataset, max_word_len=30, use_cuda=False):
         _label_idxs = vocab.label2id(labelseq)
         _char_idxs = vocab.char2id(wordseq, max_word_len)
 
-        if not use_cuda:
-            word_idxs.append(torch.tensor(_word_idxs))
-            char_idxs.append(torch.tensor(_char_idxs))
-            label_idxs.append(torch.tensor(_label_idxs))
-        else:
-            word_idxs.append(torch.tensor(_word_idxs).cuda())
-            char_idxs.append(torch.tensor(_char_idxs).cuda())
-            label_idxs.append(torch.tensor(_label_idxs).cuda())
+        word_idxs.append(torch.tensor(_word_idxs))
+        char_idxs.append(torch.tensor(_char_idxs))
+        label_idxs.append(torch.tensor(_label_idxs))
 
     return TensorDataSet(word_idxs, char_idxs, label_idxs)
 
@@ -38,7 +33,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training')
     parser.add_argument('--gpu', type=int, default=config.gpu, help='gpu id, set to -1 if use cpu mode')
     parser.add_argument('--pre_emb', action='store_true', help='choose if use pretrain embedding')
-    parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--seed', type=int, default=10, help='random seed')
     parser.add_argument('--thread', type=int, default=config.tread_num, help='thread num')
     args = parser.parse_args()
     print('setting:')
@@ -63,9 +58,9 @@ if __name__ == '__main__':
 
     # read training , dev and test file
     print('loading three datasets...')
-    train = Corpus(config.train_file, lower=False)
-    dev = Corpus(config.dev_file, lower=False)
-    test = Corpus(config.test_file, lower=False)
+    train = Corpus(config.train_file)
+    dev = Corpus(config.dev_file)
+    test = Corpus(config.test_file)
 
     # collect all words, characters and labels in trainning data
     vocab = Vocab(train, min_freq=1)
@@ -80,9 +75,9 @@ if __name__ == '__main__':
 
     # process training data , change string to index
     print('processing datasets...')
-    train_data = process_data(vocab, train, max_word_len=20, use_cuda=False)
-    dev_data = process_data(vocab, dev, max_word_len=20, use_cuda=False)
-    test_data = process_data(vocab, test, max_word_len=20, use_cuda=False)
+    train_data = process_data(vocab, train, max_word_len=20)
+    dev_data = process_data(vocab, dev, max_word_len=20)
+    test_data = process_data(vocab, test, max_word_len=20)
 
     train_loader = Data.DataLoader(
         dataset=train_data,
@@ -123,7 +118,7 @@ if __name__ == '__main__':
         net.cuda()
     
     # init evaluator
-    evaluator = Evaluator(vocab, task='pos')
+    evaluator = Evaluator(vocab)
     # init trainer
     trainer = Trainer(net, config)
     # start to train
