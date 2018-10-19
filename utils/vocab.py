@@ -51,6 +51,7 @@ class Vocab(object):
         ])
         if isinstance(unk_in_pretrain, str):
             assert unk_in_pretrain in words
+            words = list(words)
             words[words.index(unk_in_pretrain)] = self.UNK
 
         pretrained = {w: torch.tensor(v) for w, v in zip(words, vectors)}
