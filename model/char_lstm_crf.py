@@ -82,6 +82,9 @@ class Char_LSTM_CRF(torch.nn.Module):
         return mask, out, label_idxs
 
     def get_loss(self, emit, labels, mask):
+        emit = emit.transpose(0, 1)
+        labels = labels.t()
+        mask = mask.t()
         logZ = self.crf.get_logZ(emit, mask)
         scores = self.crf.score(emit, labels, mask)
         return (logZ - scores) / emit.size()[1]

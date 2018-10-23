@@ -47,56 +47,32 @@ class Trainer(object):
                 # mask = torch.arange(label_idxs.size(1)) < lens.unsqueeze(-1)
                 # mask = word_idxs.gt(0)
                 mask, out, targets = self.network.forward_batch(batch)
-                loss = self.network.get_loss(out.transpose(0,1), targets.t(), mask.t())
+                loss = self.network.get_loss(out, targets, mask)
 
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.network.parameters(), 5.0)
                 self.optimizer.step()
 
             with torch.no_grad():
-                if evaluator.task == 'chunking' or evaluator.task == 'ner':
-                    train_loss, train_p, train_r, train_F = evaluator.eval(self.network, train_loader)
-                    print('train : loss = %.4f  precision = %.4f  recall = %.4f  F = %.4f' %
-                        (train_loss, train_p, train_r, train_F))
+                train_loss, train_p = evaluator.eval(self.network, train_loader)
+                print('train : loss = %.4f  precision = %.4f' % (train_loss, train_p))
 
-                    dev_loss, dev_p, dev_r, dev_F = evaluator.eval(self.network, dev_loader)
-                    print('dev   : loss = %.4f  precision = %.4f  recall = %.4f  F = %.4f' %
-                            (dev_loss, dev_p, dev_r, dev_F))
+                dev_loss, dev_p = evaluator.eval(self.network, dev_loader)
+                print('dev   : loss = %.4f  precision = %.4f' % (dev_loss, dev_p))
 
-                    test_loss, test_p, test_r, test_F = evaluator.eval(self.network, test_loader)
-                    print('test  : loss = %.4f  precision = %.4f  recall = %.4f  F = %.4f' %
-                            (test_loss, test_p, test_r, test_F))
-                elif evaluator.task == 'pos':
-                    train_loss, train_p = evaluator.eval(self.network, train_loader)
-                    print('train : loss = %.4f  precision = %.4f' % (train_loss, train_p))
-
-                    dev_loss, dev_p = evaluator.eval(self.network, dev_loader)
-                    print('dev   : loss = %.4f  precision = %.4f' % (dev_loss, dev_p))
-
-                    test_loss, test_p = evaluator.eval(self.network, test_loader)
-                    print('test  : loss = %.4f  precision = %.4f' % (test_loss, test_p))
+                test_loss, test_p = evaluator.eval(self.network, test_loader)
+                print('test  : loss = %.4f  precision = %.4f' % (test_loss, test_p))
                 
             # save the model when dev precision get better
-            if evaluator.task == 'chunking' or evaluator.task == 'ner':
-                if dev_F > max_precision:
-                    max_precision = dev_F
-                    test_precision = test_F
-                    max_epoch = e + 1
-                    patience = 0
-                    print('save the model...')
-                    torch.save(self.network, self.config.net_file)
-                else:
-                    patience += 1
-            elif evaluator.task == 'pos':
-                if dev_p > max_precision:
-                    max_precision = dev_p
-                    test_precision = test_p
-                    max_epoch = e + 1
-                    patience = 0
-                    print('save the model...')
-                    torch.save(self.network, self.config.net_file)
-                else:
-                    patience += 1
+            if dev_p > max_precision:
+                max_precision = dev_p
+                test_precision = test_p
+                max_epoch = e + 1
+                patience = 0
+                print('save the model...')
+                torch.save(self.network, self.config.net_file)
+            else:
+                patience += 1
 
             time_end = datetime.datetime.now()
             print('iter executing time is ' + str(time_end - time_start) + '\n')
@@ -104,10 +80,6 @@ class Trainer(object):
                 break
 
         print('train finished with epoch: %d / %d' % (e + 1, self.config.epoch))
-        if evaluator.task == 'chunking' or evaluator.task == 'ner':
-            print('best epoch is epoch = %d ,the dev F = %.4f the test F = %.4f' %
-                (max_epoch, max_precision, test_precision))
-        elif evaluator.task == 'pos':
-            print('best epoch is epoch = %d ,the dev precision = %.4f the test precision = %.4f' %
-                (max_epoch, max_precision, test_precision))
+        print('best epoch is epoch = %d ,the dev precision = %.4f the test precision = %.4f' %
+            (max_epoch, max_precision, test_precision))
         print(str(datetime.datetime.now()))

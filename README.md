@@ -24,7 +24,7 @@ python evaluate.py           # reload the model and evaluate test file
 ## results
 
 ```
-dev=95.85%
-test=95.67%
+dev=95.84%
+test=95.65%
 ```
 

@@ -31,6 +31,8 @@ class Decoder(object):
         '''
         viterbi for sentences in batch
         '''
+        emits = emits.transpose(0, 1)
+        masks = masks.t()
         sen_len, batch_size, labels_num = emits.shape
 
         lens = masks.sum(dim=0)  # [batch_size]
@@ -58,89 +60,17 @@ class Decoder(object):
 
 
 class Evaluator(object):
-    def __init__(self, vocab, task='pos'):
+    def __init__(self, vocab, use_crf=True):
         self.pred_num = 0
         self.gold_num = 0
         self.correct_num = 0
         self.vocab = vocab
-        self.task = task
+        self.use_crf = use_crf
 
     def clear_num(self):
         self.pred_num = 0
         self.gold_num = 0
         self.correct_num = 0
-
-    def cal_num(self, pred, gold):
-        set1 = self.recognize(pred)
-        set2 = self.recognize(gold)
-        intersction = set1 & set2
-        correct_num = len(intersction)
-        pred_num = len(set1)
-        gold_num = len(set2)
-        return correct_num, pred_num, gold_num
-
-    def recognize(self, sequence):
-        """
-        copy from the paper
-        """
-        chunks = []
-        current = None
-
-        for i, label in enumerate(sequence):
-            if label.startswith('B-'):
-
-                if current is not None:
-                    chunks.append('@'.join(current))
-                current = [label.replace('B-', ''), '%d' % i]
-
-            elif label.startswith('S-'):
-
-                if current is not None:
-                    chunks.append('@'.join(current))
-                    current = None
-                base = label.replace('S-', '')
-                chunks.append('@'.join([base, '%d' % i]))
-
-            elif label.startswith('I-'):
-
-                if current is not None:
-                    base = label.replace('I-', '')
-                    if base == current[0]:
-                        current.append('%d' % i)
-                    else:
-                        chunks.append('@'.join(current))
-                        current = [base, '%d' % i]
-
-                else:
-                    current = [label.replace('I-', ''), '%d' % i]
-
-            elif label.startswith('E-'):
-
-                if current is not None:
-                    base = label.replace('E-', '')
-                    if base == current[0]:
-                        current.append('%d' % i)
-                        chunks.append('@'.join(current))
-                        current = None
-                    else:
-                        chunks.append('@'.join(current))
-                        current = [base, '%d' % i]
-                        chunks.append('@'.join(current))
-                        current = None
-
-                else:
-                    current = [label.replace('E-', ''), '%d' % i]
-                    chunks.append('@'.join(current))
-                    current = None
-            else:
-                if current is not None:
-                    chunks.append('@'.join(current))
-                current = None
-
-        if current is not None:
-            chunks.append('@'.join(current))
-
-        return set(chunks)
 
     def eval(self, network, data_loader):
         network.eval()
@@ -154,36 +84,21 @@ class Evaluator(object):
             mask, out, targets = network.forward_batch(batch)
             sen_lens = mask.sum(1)
 
-            batch_loss = network.get_loss(out.transpose(0, 1), targets.t(), mask.t())
+            batch_loss = network.get_loss(out, targets, mask)
             total_loss += batch_loss * batch_size
 
-            predicts = Decoder.viterbi_batch(network.crf, out.transpose(0, 1), mask.t())
+            predicts = Decoder.viterbi_batch(network.crf, out, mask)
             targets = torch.split(targets[mask], sen_lens.tolist())
             
-            if self.task == 'pos':
-                for predict, target in zip(predicts, targets):
-                    predict = predict.tolist()
-                    target = target.tolist()                
-                    correct_num = sum(x==y for x,y in zip(predict, target))
-                    self.correct_num += correct_num
-                    self.pred_num += len(predict)
-                    self.gold_num += len(target)
-            elif self.task == 'chunking' or self.task == 'ner':
-                for predict, target in zip(predicts, targets):
-                    predict = self.vocab.id2label(predict.tolist())
-                    target = self.vocab.id2label(target.tolist())
-                    correct_num, pred_num, gold_num = self.cal_num(predict, target)
-                    self.correct_num += correct_num
-                    self.pred_num += pred_num
-                    self.gold_num += gold_num
+            for predict, target in zip(predicts, targets):
+                predict = predict.tolist()
+                target = target.tolist()                
+                correct_num = sum(x==y for x,y in zip(predict, target))
+                self.correct_num += correct_num
+                self.pred_num += len(predict)
+                self.gold_num += len(target)
 
-        if self.task == 'pos':
-            precision = self.correct_num/self.pred_num
-            self.clear_num()
-            return total_loss/total_num, precision
-        elif self.task == 'chunking' or self.task == 'ner':
-            precision = self.correct_num/self.pred_num
-            recall = self.correct_num/self.gold_num
-            Fscore = (2*precision*recall)/(precision+recall)
-            self.clear_num()
-            return total_loss/total_num, precision, recall, Fscore
+        precision = self.correct_num/self.pred_num
+        self.clear_num()
+        return total_loss/total_num, precision
+
